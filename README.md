@@ -1,6 +1,6 @@
 # FLiD: Field-Localised Identity-Document Forgery Detection
 
-Official code for **"FLiD: Field-Localised Identity-Document Forgery Detection via Frozen-Backbone Embeddings"** (ECCV 2026 submission).
+Official code for **"FLiD: Field-Localised Identity-Document Forgery Detection via Frozen-Backbone Embeddings"** 
 
 FLiD is a lightweight presentation-attack detection (PAD) method for
 identity documents that decomposes each document into semantically
@@ -211,19 +211,3 @@ All metrics follow **ISO/IEC 30107-3**:
 
 ---
 
-## Citation
-
-```bibtex
-@inproceedings{flid2026,
-  title   = {{FLiD}: Field-Localised Identity-Document Forgery Detection
-             via Frozen-Backbone Embeddings},
-  author  = {Kumar, A.},
-  year    = {2026},
-}
-```
-
----
-
-## License
-
-This project is released under the MIT License. See [LICENSE](LICENSE).
