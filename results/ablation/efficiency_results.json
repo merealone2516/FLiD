@@ -1,0 +1,87 @@
+{
+  "flid_backbone": {
+    "name": "MobileNetV3-Small",
+    "params_total": 2542856,
+    "params_trainable": 0,
+    "flops": 118671872.0,
+    "flops_M": 118.7,
+    "latency_cpu_ms": 32.77,
+    "latency_cpu_std_ms": 8.71,
+    "input_size": "224\u00d7224\u00d73"
+  },
+  "flid_mlp_Face": {
+    "params_total": 190977,
+    "params_trainable": 190977,
+    "flops": 380992,
+    "flops_K": 381.0,
+    "latency_cpu_ms": 0.054,
+    "input_dim": 576
+  },
+  "flid_mlp_Text": {
+    "params_total": 190977,
+    "params_trainable": 190977,
+    "flops": 380992,
+    "flops_K": 381.0,
+    "latency_cpu_ms": 0.055,
+    "input_dim": 576
+  },
+  "flid_mlp_Both": {
+    "params_total": 762881,
+    "params_trainable": 762881,
+    "flops": 1523840,
+    "flops_K": 1523.8,
+    "latency_cpu_ms": 0.066,
+    "input_dim": 1152
+  },
+  "flid_pipeline_Face": {
+    "total_params": 2733833,
+    "trainable_params": 190977,
+    "total_flops": 119052864.0,
+    "total_flops_M": 119.1,
+    "backbone_passes": 1
+  },
+  "flid_pipeline_Text": {
+    "total_params": 2733833,
+    "trainable_params": 190977,
+    "total_flops": 475068480.0,
+    "total_flops_M": 475.1,
+    "backbone_passes": 4
+  },
+  "flid_pipeline_Both": {
+    "total_params": 3305737,
+    "trainable_params": 762881,
+    "total_flops": 594883200.0,
+    "total_flops_M": 594.9,
+    "backbone_passes": 5
+  },
+  "baseline_single": {
+    "name": "MobileNetV2 (from scratch)",
+    "params_total": 2552322,
+    "params_trainable": 2552322,
+    "flops": 2503460352.0,
+    "flops_M": 2503.5,
+    "latency_cpu_ms": 49.68,
+    "latency_cpu_std_ms": 11.29,
+    "input_size": "448\u00d7448\u00d73"
+  },
+  "baseline_cascade": {
+    "total_params": 5104644,
+    "trainable_params": 5104644,
+    "total_flops": 5006920704.0,
+    "total_flops_M": 5006.9
+  },
+  "yolo_detector": {
+    "name": "YOLOv8m (fine-tuned)",
+    "params": 25857478,
+    "params_M": 25.9,
+    "latency_cpu_ms": 126.6,
+    "latency_cpu_std_ms": 19.14
+  },
+  "e2e_latency": {
+    "flid_face_ms": 16.8,
+    "flid_face_std_ms": 3.77,
+    "baseline_face_ms": 37.01,
+    "baseline_face_std_ms": 26.98,
+    "speedup": 2.2
+  }
+}
