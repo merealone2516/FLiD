@@ -1,17 +1,4 @@
-"""
-FLiD — Model Architectures
 
-Defines the frozen MobileNetV3-Small backbone used for feature extraction
-and the lightweight MLP classifiers for each attack scenario.
-
-Architecture:
-    Backbone : MobileNetV3-Small (ImageNet-pretrained, FROZEN)  → 576-D
-    Face MLP : 576 → 256 → 128 → 64 → 32 → 1   (190 977 params)
-    Text MLP : 576 → 256 → 128 → 64 → 32 → 1   (190 977 params)
-    Both MLP : 1152 → 512 → 256 → 128 → 64 → 1  (762 881 params)
-
-Total trainable parameters (Face or Text): ~191K
-"""
 
 import torch
 import torch.nn as nn
