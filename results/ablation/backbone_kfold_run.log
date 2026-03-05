@@ -1,0 +1,99 @@
+Device: mps
+
+============================================================
+  Backbone: MobileNetV3-Small
+  Params: 2,542,856  FLOPs: 118.7M
+============================================================
+
+  --- Face Attack ---
+    Samples: 612 (400R + 212F)  dim=576
+      Fold 1: AUC=0.8736  EER=17.84%
+      Fold 2: AUC=0.9278  EER=13.69%
+      Fold 3: AUC=0.7726  EER=27.39%
+      Fold 4: AUC=0.8147  EER=23.12%
+      Fold 5: AUC=0.9020  EER=19.38%
+    >> AUC=0.8581±0.0570  EER=20.28±4.66%
+
+  --- Text Attack ---
+    Samples: 620 (311R + 309F)  dim=576
+      Fold 1: AUC=0.9264  EER=12.91%
+      Fold 2: AUC=0.9666  EER=6.45%
+      Fold 3: AUC=0.9649  EER=14.52%
+      Fold 4: AUC=0.9636  EER=9.68%
+      Fold 5: AUC=0.9295  EER=12.90%
+    >> AUC=0.9502±0.0182  EER=11.29±2.89%
+
+  --- Both Attack ---
+    Samples: 422 (211R + 211F)  dim=1152
+      Fold 1: AUC=0.9510  EER=11.77%
+      Fold 2: AUC=0.8995  EER=18.83%
+      Fold 3: AUC=0.9218  EER=14.29%
+      Fold 4: AUC=0.9751  EER=11.90%
+      Fold 5: AUC=0.9700  EER=7.14%
+    >> AUC=0.9435±0.0288  EER=12.79±3.81%
+
+============================================================
+  Backbone: EfficientNet-B0
+  Params: 5,288,548  FLOPs: 390.0M
+============================================================
+
+  --- Face Attack ---
+    Samples: 153 (100R + 53F)  dim=1280
+      Fold 1: AUC=0.9182  EER=19.09%
+      Fold 2: AUC=0.7023  EER=35.68%
+      Fold 3: AUC=0.7705  EER=28.64%
+      Fold 4: AUC=0.9175  EER=10.00%
+      Fold 5: AUC=0.8425  EER=20.00%
+    >> AUC=0.8302±0.0842  EER=22.68±8.78%
+
+  --- Text Attack ---
+    Samples: 620 (311R + 309F)  dim=1280
+      Fold 1: AUC=0.4930  EER=50.81%
+      Fold 2: AUC=0.5147  EER=48.39%
+      Fold 3: AUC=0.5773  EER=45.16%
+      Fold 4: AUC=0.5955  EER=43.55%
+      Fold 5: AUC=0.5134  EER=48.39%
+    >> AUC=0.5388±0.0400  EER=47.26±2.58%
+
+  --- Both Attack ---
+    Samples: 422 (211R + 211F)  dim=2560
+      Fold 1: AUC=0.9676  EER=14.12%
+      Fold 2: AUC=0.9529  EER=7.06%
+      Fold 3: AUC=0.9739  EER=9.52%
+      Fold 4: AUC=0.9742  EER=9.52%
+      Fold 5: AUC=0.9751  EER=9.52%
+    >> AUC=0.9687±0.0083  EER=9.95±2.29%
+
+============================================================
+  Backbone: ResNet-18
+  Params: 11,689,512  FLOPs: 1820.0M
+============================================================
+
+  --- Face Attack ---
+    Extracting ResNet-18 face embeddings...
+    Samples: 153 (100R + 53F)  dim=512
+      Fold 1: AUC=0.8477  EER=19.09%
+      Fold 2: AUC=0.9159  EER=19.09%
+      Fold 3: AUC=0.6750  EER=38.18%
+      Fold 4: AUC=0.8500  EER=30.00%
+      Fold 5: AUC=0.6800  EER=30.00%
+    >> AUC=0.7937±0.0980  EER=27.27±7.32%
+
+  --- Text Attack ---
+    Extracting ResNet-18 text embeddings...
+    Samples: 620 (311R + 309F)  dim=512
+      Fold 1: AUC=0.5137  EER=50.83%
+      Fold 2: AUC=0.5038  EER=52.42%
+      Fold 3: AUC=0.6335  EER=41.94%
+      Fold 4: AUC=0.6422  EER=41.94%
+      Fold 5: AUC=0.5203  EER=46.77%
+    >> AUC=0.5627±0.0616  EER=46.78±4.36%
+
+  --- Both Attack ---
+    Extracting ResNet-18 both embeddings (face+text concat)...
+Traceback (most recent call last):
+  File "/Users/akumar/Downloads/Turing/FLiD/evaluation/backbone_kfold_ablation.py", line 444, in <module>
+    main()
+  File "/Users/akumar/Downloads/Turing/FLiD/evaluation/backbone_kfold_ablation.py", line 398, in main
+    print(f"    Samples: {len(X)} ({(y==0).sum()}R + {(y==1).sum()}F)  dim={X.shape[1]}")
+IndexError: tuple index out of range
