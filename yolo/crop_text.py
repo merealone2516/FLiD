@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-YOLO — Text Region Cropper
 
-Uses a fine-tuned YOLOv8 model to detect and crop text regions from
-Text_attack images.  Saves the highest-confidence text crop per image
-along with detection metadata.
-
-Usage:
-    python -m yolo.crop_text
-    python -m yolo.crop_text --input_dir /path/to/Text_attack --output_dir /path/to/output
-"""
 
 import argparse
 import json

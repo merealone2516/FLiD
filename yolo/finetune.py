@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""
-YOLO — Fine-Tune YOLOv8m for Face/Text Field Detection
 
-Fine-tunes a pre-trained YOLOv8m model on annotated identity-document
-images to detect face and text regions.
-
-Classes:
-    0: face
-    1: text
-
-Usage:
-    python -m yolo.finetune
-    python -m yolo.finetune --epochs 200 --batch 16
-"""
 
 import argparse
 import sys

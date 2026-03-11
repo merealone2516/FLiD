@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""
-YOLO — Face Region Cropper
 
-Uses a fine-tuned YOLOv8 model to detect and crop face regions from
-Face_attack images.  Saves the highest-confidence face crop per image
-along with detection metadata.
-
-Usage:
-    python -m yolo.crop_faces
-    python -m yolo.crop_faces --input_dir /path/to/Face_attack --output_dir /path/to/output
-"""
 
 import argparse
 import json

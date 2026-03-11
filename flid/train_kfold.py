@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-FLiD — 5-Fold Stratified Cross-Validation with Bootstrap CIs
 
-Trains lightweight MLP classifiers on frozen MobileNetV3-Small embeddings
-and reports ISO/IEC 30107-3 metrics (EER, BPCER10/20/50) with 95% bootstrap
-confidence intervals.
-
-Attack scenarios:
-    Face  — augmented face-crop embeddings, document-level split.
-    Text  — patch-based text-crop embeddings.
-    Both  — concatenated face + text embeddings.
-
-Usage:
-    python -m flid.train_kfold
-    python -m flid.train_kfold --attack Face
-    python -m flid.train_kfold --attack Text --n_bootstraps 2000
-"""
 
 import argparse
 import json

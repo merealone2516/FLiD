@@ -1,14 +1,3 @@
-"""
-FLiD — ISO/IEC 30107-3 Compliant Metrics
-
-Computes EER, BPCER@APCER thresholds (BPCER10, BPCER20, BPCER50, BPCER100),
-AUC, accuracy, precision, recall, and F1.
-
-Convention:
-    label 0 = Bona fide (Real)
-    label 1 = Attack (Fake)
-    bf_scores  = P(Real) — higher means more likely bona fide
-"""
 
 import numpy as np
 

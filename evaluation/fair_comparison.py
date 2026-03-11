@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""
-Evaluation — Fair YOLO vs Coordinate-Based Crop Comparison
 
-Ensures an apples-to-apples comparison between YOLO-detected and
-coordinate-based crops by using the exact same:
-    • MobileNetV3-Small backbone
-    • 224×224 resize + ImageNet normalisation
-    • MLP architecture and hyperparameters
-    • No augmentation / no patch-based embedding (raw single-crop)
-    • 5-run averaged metrics for stability
-
-Usage:
-    python -m evaluation.fair_comparison
-"""
 
 import json
 import sys

@@ -1,9 +1,4 @@
-"""
-FLiD — Data Loading Utilities
 
-Functions to load pre-extracted MobileNetV3-Small embeddings for each
-attack scenario, as well as raw image paths for YOLO / ablation pipelines.
-"""
 
 import json
 import re

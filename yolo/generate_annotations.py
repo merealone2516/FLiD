@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-YOLO — Generate Annotations from Crop Data
 
-Creates YOLO-format annotations by template-matching existing crop images
-(face_crop.png, text_crop.png) against the original full-document images.
-
-Output:
-    <yolo_dataset>/
-    ├── images/{train,val}/
-    ├── labels/{train,val}/        # YOLO txt annotations
-    └── data.yaml
-
-Usage:
-    python -m yolo.generate_annotations
-"""
 
 import argparse
 import os
