@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 
 warnings.filterwarnings('ignore')
 
@@ -299,42 +299,24 @@ def train_mlp_fold(model, X_train, y_train, X_val, y_val, device,
     return bf_scores
 
 
-def run_kfold(X, y, in_dim, hidden_dims, device, doc_names=None, doc_level=False):
-    """Run 5-fold stratified CV. Returns list of per-fold metric dicts."""
+def run_kfold(X, y, in_dim, hidden_dims, device, doc_names=None):
+    """Run 5-fold document-level stratified CV. Returns list of per-fold metric dicts."""
+    X = np.asarray(X)
+    y = np.asarray(y)
+    # Fall back to sample-level groups when doc_names unavailable
+    groups = np.asarray(doc_names if doc_names is not None
+                        else [str(i) for i in range(len(X))])
+
+    sgkf = StratifiedGroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
     fold_metrics = []
-    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
-
-    if doc_level and doc_names is not None:
-        unique_docs = list(dict.fromkeys(doc_names))
-        doc_label = {}
-        for d, l in zip(doc_names, y):
-            doc_label[d] = l
-        doc_y = np.array([doc_label[d] for d in unique_docs])
-
-        for fold, (tr_di, va_di) in enumerate(skf.split(unique_docs, doc_y), 1):
-            train_docs = {unique_docs[i] for i in tr_di}
-            val_docs = {unique_docs[i] for i in va_di}
-            train_idx = [i for i, d in enumerate(doc_names) if d in train_docs]
-            val_idx = [i for i, d in enumerate(doc_names) if d in val_docs]
-            X_tr, y_tr = X[train_idx], y[train_idx]
-            X_vl, y_vl = X[val_idx], y[val_idx]
-
-            model = make_mlp(in_dim, hidden_dims)
-            bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
-            m = compute_metrics(y_vl, bf)
-            fold_metrics.append(m)
-            print(f"      Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%")
-    else:
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            X_tr, y_tr = X[train_idx], y[train_idx]
-            X_vl, y_vl = X[val_idx], y[val_idx]
-
-            model = make_mlp(in_dim, hidden_dims)
-            bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
-            m = compute_metrics(y_vl, bf)
-            fold_metrics.append(m)
-            print(f"      Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%")
-
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups), 1):
+        X_tr, y_tr = X[train_idx], y[train_idx]
+        X_vl, y_vl = X[val_idx],   y[val_idx]
+        model = make_mlp(in_dim, hidden_dims)
+        bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
+        m = compute_metrics(y_vl, bf)
+        fold_metrics.append(m)
+        print(f"      Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%")
     return fold_metrics
 
 
@@ -427,12 +409,11 @@ def main():
 
             in_dim = cfg[f'{attack.lower()}_dim']
             hidden = cfg[f'{attack.lower()}_hidden']
-            doc_level = (attack == 'Face' and doc_names is not None)
 
             print(f"    Samples: {len(X)} ({(y==0).sum()}R + {(y==1).sum()}F)  dim={X.shape[1]}")
 
             fold_metrics = run_kfold(X, y, in_dim, hidden, device,
-                                     doc_names=doc_names, doc_level=doc_level)
+                                     doc_names=doc_names)
 
             # Aggregate
             metrics_summary = {}

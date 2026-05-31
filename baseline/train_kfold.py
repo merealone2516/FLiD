@@ -28,7 +28,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler, Subset
 from torchvision import transforms
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from PIL import Image
 
 warnings.filterwarnings('ignore')
@@ -74,8 +74,8 @@ class ImageDataset(Dataset):
 # ═══════════════════════════════════════════════════════════════
 
 def load_image_paths(attack_type, data_root):
-    """Load all image paths and labels from train+test splits combined."""
-    paths, labels = [], []
+    """Load all image paths, labels, and doc_ids from train+test splits combined."""
+    paths, labels, doc_ids = [], [], []
     root = Path(data_root) / attack_type
 
     for label, cat in enumerate(['Real', 'Fake']):
@@ -84,11 +84,25 @@ def load_image_paths(attack_type, data_root):
             if not split_dir.exists():
                 continue
             for f in sorted(split_dir.iterdir()):
-                if f.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}:
-                    paths.append(str(f))
-                    labels.append(label)
+                if f.suffix.lower() not in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}:
+                    continue
+                paths.append(str(f))
+                labels.append(label)
+                # Get doc_id from paired JSON, fall back to filename parsing
+                json_path = f.with_suffix('.json')
+                if json_path.exists():
+                    try:
+                        import json as _json
+                        meta = _json.load(open(json_path))
+                        doc_id = meta.get('person_info', {}).get(
+                            'face_id', f.stem.split('-', 1)[-1])
+                    except Exception:
+                        doc_id = f.stem.split('-', 1)[-1]
+                else:
+                    doc_id = f.stem.split('-', 1)[-1]
+                doc_ids.append(doc_id)
 
-    return paths, np.array(labels)
+    return paths, np.array(labels), doc_ids
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -169,21 +183,31 @@ def train_one_fold(train_paths, train_labels, val_paths, val_labels, device):
 # ═══════════════════════════════════════════════════════════════
 
 def run_kfold(attack_type, data_root, device, n_folds=5):
-    paths, labels = load_image_paths(attack_type, data_root)
-    print(f"  Total images: {len(paths)} ({(labels==0).sum()}R, {(labels==1).sum()}F)")
+    paths, labels, doc_ids = load_image_paths(attack_type, data_root)
+    groups = np.asarray(doc_ids)
+    n_docs = len(set(doc_ids))
+    print(f"  Total images: {len(paths)} ({(labels==0).sum()}R, {(labels==1).sum()}F) "
+          f"across {n_docs} unique documents")
 
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+    sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
     fold_metrics = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(paths, labels), 1):
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(paths, labels, groups), 1):
+        train_docs = set(groups[train_idx].tolist())
+        val_docs   = set(groups[val_idx].tolist())
+        assert len(train_docs & val_docs) == 0, f"Leakage in fold {fold}!"
+
         trp = [paths[i] for i in train_idx]
         trl = labels[train_idx]
         vlp = [paths[i] for i in val_idx]
         vll = labels[val_idx]
 
-        print(f"  Fold {fold}: train={len(trp)}, val={len(vlp)}")
+        print(f"  Fold {fold}: train={len(trp)} ({len(train_docs)} docs), "
+              f"val={len(vlp)} ({len(val_docs)} docs)")
         y_val, scores_val = train_one_fold(trp, trl, vlp, vll, device)
         m = compute_metrics(y_val, scores_val)
+        m['y_true']    = y_val.tolist()
+        m['bf_scores'] = scores_val.tolist()
         fold_metrics.append(m)
         print(f"    AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
               f"BPCER10={m['bpcer10']:.1f}%  BPCER20={m['bpcer20']:.1f}%")
@@ -197,43 +221,51 @@ def run_kfold(attack_type, data_root, device, n_folds=5):
 
 def run_cascade_kfold(data_root, device, n_folds=5):
     """
-    For Each fold: train Face and Text models separately,
-    evaluate on Both_attack split using cascade min-score.
+    Leakage-free cascade for Both_attack.
+
+    Folds are split by Both_attack doc_ids. For each fold:
+    - Face model: trained on all Face_attack data (different doc_id pool — no overlap)
+    - Text model: trained on Text_attack data EXCLUDING val doc_ids (shared pool)
+    - Cascade score = min(face_score, text_score) on Both_attack val set
     """
-    # Load all paths for all three attack types
-    face_paths, face_labels = load_image_paths('Face_attack', data_root)
-    text_paths, text_labels = load_image_paths('Text_attack', data_root)
-    both_paths, both_labels = load_image_paths('Both_attack', data_root)
+    face_paths, face_labels, _          = load_image_paths('Face_attack', data_root)
+    text_paths, text_labels, text_docs  = load_image_paths('Text_attack', data_root)
+    both_paths, both_labels, both_docs  = load_image_paths('Both_attack', data_root)
 
-    print(f"  Cascade: Face={len(face_paths)}, Text={len(text_paths)}, Both={len(both_paths)}")
+    both_groups = np.asarray(both_docs)
+    n_docs = len(set(both_docs))
+    print(f"  Cascade: Face={len(face_paths)}, Text={len(text_paths)}, "
+          f"Both={len(both_paths)} ({n_docs} unique docs)")
 
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+    sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
     fold_metrics = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(both_paths, both_labels), 1):
-        both_val_paths = [both_paths[i] for i in val_idx]
+    for fold, (_, val_idx) in enumerate(
+            sgkf.split(both_paths, both_labels, both_groups), 1):
+
+        both_val_paths  = [both_paths[i] for i in val_idx]
         both_val_labels = both_labels[val_idx]
+        val_doc_ids     = set(both_groups[val_idx].tolist())
 
-        # Train face model on all face data except this fold's both-val overlap
-        face_ds = ImageDataset(face_paths, face_labels, get_train_transforms())
-        face_val_ds = ImageDataset(face_paths[:10], face_labels[:10], get_val_transforms())
-
-        # Simple approach: train on all face data for this fold
+        # Face_attack uses flickr doc_ids — no overlap with Both_attack facelab ids
+        # Train on all Face_attack data safely
         face_y, face_s = train_one_fold(
-            face_paths, face_labels,
-            both_val_paths, both_val_labels, device
-        )
+            face_paths, face_labels, both_val_paths, both_val_labels, device)
 
-        text_y, text_s = train_one_fold(
-            text_paths, text_labels,
-            both_val_paths, both_val_labels, device
-        )
+        # Text_attack shares doc_ids with Both_attack — exclude val docs
+        text_train_idx = [i for i, d in enumerate(text_docs) if d not in val_doc_ids]
+        text_train_paths  = [text_paths[i] for i in text_train_idx]
+        text_train_labels = text_labels[text_train_idx]
+        _, text_s = train_one_fold(
+            text_train_paths, text_train_labels, both_val_paths, both_val_labels, device)
 
-        # Cascade: min(face_score, text_score)
         cascade_scores = np.minimum(face_s, text_s)
         m = compute_metrics(both_val_labels, cascade_scores)
+        m['y_true']    = both_val_labels.tolist()
+        m['bf_scores'] = cascade_scores.tolist()
         fold_metrics.append(m)
-        print(f"  Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%")
+        print(f"  Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
+              f"val_docs={len(val_doc_ids)}")
 
     return fold_metrics
 

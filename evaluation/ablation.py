@@ -133,13 +133,13 @@ def main():
     # ── Existing FLiD numbers ──
     print("\n  Loading FLiD embeddings for baseline comparison...")
     X_face, y_face, face_docs = load_face_embeddings()
-    X_text, y_text = load_text_embeddings()
-    X_both, y_both = load_both_embeddings()
+    X_text, y_text, text_docs = load_text_embeddings()
+    X_both, y_both, both_docs = load_both_embeddings()
 
     for name, X, y, docs, dl in [
         ('Face', X_face, y_face, face_docs, True),
-        ('Text', X_text, y_text, None, False),
-        ('Both', X_both, y_both, None, False),
+        ('Text', X_text, y_text, text_docs, True),
+        ('Both', X_both, y_both, both_docs, True),
     ]:
         m = train_and_eval_mlp(X, y, X.shape[1], doc_names=docs,
                                doc_level=dl, device=device)
@@ -149,7 +149,7 @@ def main():
     # ── (i) Whole-image vs ROI ──
     print("\n  ABLATION (i): Whole-image vs ROI (Face)")
     try:
-        X_full, y_full = load_full_image_embeddings()
+        X_full, y_full, _ = load_full_image_embeddings()
         m = train_and_eval_mlp(X_full, y_full, 576, device=device)
         all_results['whole_image_face'] = m
         print(f"    Whole-image: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%")

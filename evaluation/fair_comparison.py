@@ -141,9 +141,9 @@ def main():
 
     for label, X, y, docs, dl in [
         ('coord_face', cf_X, cf_y, cf_docs, True),
-        ('yolo_face', yf_X, yf_y, yf_docs, True),
-        ('coord_text', ct_X, ct_y, None, False),
-        ('yolo_text', yt_X, yt_y, None, False),
+        ('yolo_face',  yf_X, yf_y, yf_docs, True),
+        ('coord_text', ct_X, ct_y, ct_docs, True),
+        ('yolo_text',  yt_X, yt_y, yt_docs, True),
     ]:
         m = train_and_eval_mlp(X, y, EMB_DIM, doc_names=docs, doc_level=dl, device=device)
         results[label] = m

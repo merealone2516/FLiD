@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
+"""
+FLiD 5-fold cross-validation — leakage-free document-level split for ALL attacks.
 
+Previously only Face used a document-level split; Text and Both used plain
+sample-level StratifiedKFold, which allowed crops of the same physical document
+to appear in both train and test, inflating metrics.
 
+This version uses StratifiedGroupKFold (grouped by face_id) for all three
+attack scenarios and asserts zero document overlap per fold.
+"""
 import argparse
 import json
 import warnings
-import re
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from pathlib import Path
 
 warnings.filterwarnings('ignore')
@@ -18,21 +25,18 @@ warnings.filterwarnings('ignore')
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from configs.paths import get_device, KFOLD_OUTPUT
+from configs.paths import get_device, KFOLD_OUTPUT, EMB_DIR
 from flid.models import FaceClassifier, TextClassifier, BothClassifier
 from flid.metrics import compute_metrics
 from flid.data import load_face_embeddings, load_text_embeddings, load_both_embeddings
+from flid.data import _load_emb_json
 
 SEED = 42
 
 
-# ═══════════════════════════════════════════════════════════════
-# Training helpers
-# ═══════════════════════════════════════════════════════════════
-
+# ─── Training helper ─────────────────────────────────────────────────────────
 def train_mlp_fold(model, X_train, y_train, X_val, y_val, device,
                    epochs=100, patience=15, lr=1e-3):
-    """Train one MLP fold with early stopping and return bona-fide scores on val."""
     model = model.to(device)
 
     n_pos = (y_train == 1).sum()
@@ -42,25 +46,19 @@ def train_mlp_fold(model, X_train, y_train, X_val, y_val, device,
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
-    X_t = torch.tensor(X_train, dtype=torch.float32)
-    y_t = torch.tensor(y_train, dtype=torch.float32)
-    ds = TensorDataset(X_t, y_t)
+    ds = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
+                       torch.tensor(y_train, dtype=torch.float32))
     dl = DataLoader(ds, batch_size=32, shuffle=True)
-
     X_v = torch.tensor(X_val, dtype=torch.float32).to(device)
     y_v = torch.tensor(y_val, dtype=torch.float32).to(device)
 
-    best_loss = float('inf')
-    best_state = None
-    wait = 0
-
-    for epoch in range(epochs):
+    best_loss, best_state, wait = float('inf'), None, 0
+    for _ in range(epochs):
         model.train()
         for xb, yb in dl:
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(xb).squeeze(-1), yb)
-            loss.backward()
+            criterion(model(xb).squeeze(-1), yb).backward()
             optimizer.step()
 
         model.eval()
@@ -80,94 +78,92 @@ def train_mlp_fold(model, X_train, y_train, X_val, y_val, device,
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        logits = model(X_v).squeeze(-1)
-        p_fake = torch.sigmoid(logits)
+        p_fake = torch.sigmoid(model(X_v).squeeze(-1))
         bf_scores = (1.0 - p_fake).cpu().numpy()
-
     return bf_scores
 
 
-# ═══════════════════════════════════════════════════════════════
-# K-Fold CV runner
-# ═══════════════════════════════════════════════════════════════
-
-def run_kfold_cv(X, y, make_model_fn, in_dim, device, n_folds=5,
-                 doc_names=None, doc_level=False):
+# ─── Document-level K-Fold CV ────────────────────────────────────────────────
+def run_kfold_cv(X, y, make_model_fn, device, doc_names, n_folds=5):
     """
-    Run stratified k-fold CV.  For face-attack the split is done at the
-    document level to avoid data leakage from augmentation.
+    StratifiedGroupKFold split by doc_names (face_id). No document may span
+    the train/test boundary. Asserts zero overlap per fold.
 
-    Returns:
-        List of per-fold metric dicts.
+    Returns (fold_metrics, leakage_report).
     """
-    fold_metrics = []
+    X = np.asarray(X)
+    y = np.asarray(y)
+    groups = np.asarray(doc_names)
 
-    if doc_level and doc_names is not None:
-        unique_docs = list(dict.fromkeys(doc_names))
-        doc_label = {}
-        for d, l in zip(doc_names, y):
-            doc_label[d] = l
-        doc_y = np.array([doc_label[d] for d in unique_docs])
+    n_unique = len(set(groups.tolist()))
+    if n_unique < n_folds:
+        raise ValueError(
+            f"Only {n_unique} unique documents for {n_folds} folds. "
+            "Reduce --n_folds or check doc_id extraction."
+        )
 
-        skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
-        for fold, (train_doc_idx, val_doc_idx) in enumerate(skf.split(unique_docs, doc_y), 1):
-            train_docs = {unique_docs[i] for i in train_doc_idx}
-            val_docs = {unique_docs[i] for i in val_doc_idx}
-            train_idx = [i for i, d in enumerate(doc_names) if d in train_docs]
-            val_idx = [i for i, d in enumerate(doc_names) if d in val_docs]
+    sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+    fold_metrics, leakage_report = [], []
 
-            X_tr, y_tr = X[train_idx], y[train_idx]
-            X_vl, y_vl = X[val_idx], y[val_idx]
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups), 1):
+        train_docs = set(groups[train_idx].tolist())
+        val_docs   = set(groups[val_idx].tolist())
+        overlap    = train_docs & val_docs
 
-            model = make_model_fn()
-            bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
-            m = compute_metrics(y_vl, bf)
-            fold_metrics.append(m)
-            print(f"    Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
-                  f"BPCER10={m['bpcer10']:.1f}%  BPCER20={m['bpcer20']:.1f}%")
-    else:
-        skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            X_tr, y_tr = X[train_idx], y[train_idx]
-            X_vl, y_vl = X[val_idx], y[val_idx]
+        assert len(overlap) == 0, (
+            f"LEAKAGE in fold {fold}: {len(overlap)} documents in both "
+            f"train and test: {sorted(overlap)[:5]}..."
+        )
 
-            model = make_model_fn()
-            bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
-            m = compute_metrics(y_vl, bf)
-            fold_metrics.append(m)
-            print(f"    Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
-                  f"BPCER10={m['bpcer10']:.1f}%  BPCER20={m['bpcer20']:.1f}%")
+        X_tr, y_tr = X[train_idx], y[train_idx]
+        X_vl, y_vl = X[val_idx],   y[val_idx]
 
-    return fold_metrics
+        model = make_model_fn()
+        bf    = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
+        m     = compute_metrics(y_vl, bf)
+        fold_metrics.append(m)
+
+        leakage_report.append({
+            'fold':            fold,
+            'n_train_samples': int(len(train_idx)),
+            'n_val_samples':   int(len(val_idx)),
+            'n_train_docs':    len(train_docs),
+            'n_val_docs':      len(val_docs),
+            'doc_overlap':     0,
+            'val_real':        int((y_vl == 0).sum()),
+            'val_fake':        int((y_vl == 1).sum()),
+            'y_true':          y_vl.tolist(),
+            'bf_scores':       bf.tolist(),
+        })
+
+        print(f"  Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
+              f"BPCER10={m['bpcer10']:.1f}%  "
+              f"train_docs={len(train_docs)}  val_docs={len(val_docs)}")
+
+    return fold_metrics, leakage_report
 
 
-# ═══════════════════════════════════════════════════════════════
-# Bootstrap CIs
-# ═══════════════════════════════════════════════════════════════
-
+# ─── Bootstrap CI ────────────────────────────────────────────────────────────
 def bootstrap_ci(fold_values, n_boot=1000, alpha=0.05):
-    """95 % bootstrap confidence interval from per-fold values."""
     arr = np.array(fold_values)
-    means = []
-    for _ in range(n_boot):
-        sample = np.random.choice(arr, size=len(arr), replace=True)
-        means.append(np.mean(sample))
-    lo = np.percentile(means, 100 * alpha / 2)
-    hi = np.percentile(means, 100 * (1 - alpha / 2))
-    return float(np.mean(arr)), float(np.std(arr)), float(lo), float(hi)
+    means = [np.mean(np.random.choice(arr, size=len(arr), replace=True))
+             for _ in range(n_boot)]
+    return (float(np.mean(arr)), float(np.std(arr)),
+            float(np.percentile(means, 100 * alpha / 2)),
+            float(np.percentile(means, 100 * (1 - alpha / 2))))
 
 
-# ═══════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════
-
+# ─── Main ────────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description='FLiD 5-fold CV')
+    parser = argparse.ArgumentParser(
+        description='FLiD 5-fold CV — document-level, leakage-free')
     parser.add_argument('--attack', choices=['Face', 'Text', 'Both', 'all'],
-                        default='all', help='Attack scenario')
-    parser.add_argument('--n_folds', type=int, default=5)
+                        default='all')
+    parser.add_argument('--n_folds',      type=int, default=5)
     parser.add_argument('--n_bootstraps', type=int, default=1000)
-    parser.add_argument('--device', type=str, default='auto')
+    parser.add_argument('--device',       type=str, default='auto')
+    parser.add_argument('--full_image',   action='store_true',
+                        help='Use full-image embeddings instead of ROI crops')
     args = parser.parse_args()
 
     np.random.seed(SEED)
@@ -177,79 +173,74 @@ def main():
 
     KFOLD_OUTPUT.mkdir(parents=True, exist_ok=True)
     attacks = ['Face', 'Text', 'Both'] if args.attack == 'all' else [args.attack]
-
     all_results = {}
 
     for attack in attacks:
         print(f"\n{'='*60}")
-        print(f"  {attack} Attack — {args.n_folds}-fold CV")
+        print(f"  {attack} Attack — {args.n_folds}-fold CV (document-level split)")
         print(f"{'='*60}")
 
-        if attack == 'Face':
+        if args.full_image:
+            dims = {'Face': 576, 'Text': 576, 'Both': 1152}
+            path = EMB_DIR / f'{attack}_attack_full.json'
+            X, y, doc_names = _load_emb_json(path, expected_dim=dims[attack])
+            make_fn = {'Face': FaceClassifier, 'Text': TextClassifier,
+                       'Both': BothClassifier}[attack]
+        elif attack == 'Face':
             X, y, doc_names = load_face_embeddings()
             make_fn = FaceClassifier
-            doc_level = True
-            in_dim = 576
         elif attack == 'Text':
-            X, y = load_text_embeddings()
-            doc_names = None
+            X, y, doc_names = load_text_embeddings()
             make_fn = TextClassifier
-            doc_level = False
-            in_dim = 576
         else:
-            X, y = load_both_embeddings()
-            doc_names = None
+            X, y, doc_names = load_both_embeddings()
             make_fn = BothClassifier
-            doc_level = False
-            in_dim = 1152
 
-        print(f"  Samples: {len(X)} ({(y==0).sum()} Real, {(y==1).sum()} Fake)")
+        n_docs = len(set(doc_names))
+        print(f"  Samples: {len(X)}  "
+              f"({(y==0).sum()} Real, {(y==1).sum()} Fake)  "
+              f"across {n_docs} unique documents")
 
-        fold_metrics = run_kfold_cv(
-            X, y, make_fn, in_dim, device,
-            n_folds=args.n_folds, doc_names=doc_names, doc_level=doc_level,
-        )
+        fold_metrics, leakage_report = run_kfold_cv(
+            X, y, make_fn, device, doc_names, n_folds=args.n_folds)
 
-        # Aggregate with bootstrap CIs
         summary = {}
-        for metric_key in ['auc', 'eer', 'accuracy', 'f1',
-                           'bpcer10', 'bpcer20', 'bpcer50', 'bpcer100']:
-            vals = [m[metric_key] for m in fold_metrics]
+        for key in ['auc', 'eer', 'accuracy', 'f1',
+                    'bpcer10', 'bpcer20', 'bpcer50', 'bpcer100']:
+            vals = [m[key] for m in fold_metrics]
             mean, std, lo, hi = bootstrap_ci(vals, n_boot=args.n_bootstraps)
-            summary[metric_key] = {
-                'mean': round(mean, 4),
-                'std': round(std, 4),
-                'ci_lo': round(lo, 4),
-                'ci_hi': round(hi, 4),
-            }
+            summary[key] = {'mean': round(mean, 4), 'std': round(std, 4),
+                            'ci_lo': round(lo, 4), 'ci_hi': round(hi, 4)}
 
         all_results[attack] = {
-            'folds': fold_metrics,
-            'summary': summary,
+            'folds':              fold_metrics,
+            'summary':            summary,
+            'split':              'document_level_StratifiedGroupKFold',
+            'n_unique_documents': n_docs,
+            'leakage_report':     leakage_report,
+            'max_doc_overlap':    max(r['doc_overlap'] for r in leakage_report),
         }
 
         print(f"\n  Summary:")
         for k, v in summary.items():
             print(f"    {k:<10s}: {v['mean']:.4f} ± {v['std']:.4f}  "
                   f"[{v['ci_lo']:.4f}, {v['ci_hi']:.4f}]")
+        print(f"  Max document overlap: "
+              f"{all_results[attack]['max_doc_overlap']} (must be 0)")
 
-    # Save
-    out_path = KFOLD_OUTPUT / 'kfold_bootstrap_results.json'
+    suffix = '_fullimage' if args.full_image else '_docsplit'
+    out_path = KFOLD_OUTPUT / f'kfold_results{suffix}.json'
 
-    def serialize(o):
-        if isinstance(o, (np.floating, np.integer)):
-            return float(o)
-        if isinstance(o, np.ndarray):
-            return o.tolist()
-        if isinstance(o, dict):
-            return {k: serialize(v) for k, v in o.items()}
-        if isinstance(o, list):
-            return [serialize(v) for v in o]
+    def _ser(o):
+        if isinstance(o, (np.floating, np.integer)): return float(o)
+        if isinstance(o, np.ndarray):                return o.tolist()
+        if isinstance(o, dict):   return {k: _ser(v) for k, v in o.items()}
+        if isinstance(o, list):   return [_ser(v) for v in o]
         return o
 
     with open(out_path, 'w') as f:
-        json.dump(serialize(all_results), f, indent=2)
-    print(f"\nResults saved to {out_path}")
+        json.dump(_ser(all_results), f, indent=2)
+    print(f"\nResults saved → {out_path}")
 
 
 if __name__ == '__main__':

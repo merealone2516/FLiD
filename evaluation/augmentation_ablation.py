@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 
 warnings.filterwarnings('ignore')
 
@@ -153,27 +153,18 @@ def train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device,
 # ═══════════════════════════════════════════════════════════════
 
 def run_kfold_doc_level(X, y, doc_names, device):
-    """5-fold CV with document-level splitting (augmented versions stay together)."""
-    unique_docs = list(dict.fromkeys(doc_names))
-    doc_to_label = {}
-    for name, label in zip(doc_names, y):
-        doc_to_label[name] = label
-    doc_labels = np.array([doc_to_label[d] for d in unique_docs])
-
-    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
+    """5-fold CV with document-level splitting (StratifiedGroupKFold)."""
+    X = np.asarray(X)
+    y = np.asarray(y)
+    groups = np.asarray(doc_names)
+    sgkf = StratifiedGroupKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
     fold_metrics = []
 
-    for fold, (doc_train_idx, doc_val_idx) in enumerate(skf.split(unique_docs, doc_labels), 1):
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups), 1):
         np.random.seed(SEED + fold)
         torch.manual_seed(SEED + fold)
-
-        val_docs = set(unique_docs[i] for i in doc_val_idx)
-        train_idx = [i for i, n in enumerate(doc_names) if n not in val_docs]
-        val_idx = [i for i, n in enumerate(doc_names) if n in val_docs]
-
         X_tr, y_tr = X[train_idx], y[train_idx]
-        X_vl, y_vl = X[val_idx], y[val_idx]
-
+        X_vl, y_vl = X[val_idx],   y[val_idx]
         model = make_mlp()
         bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
         m = compute_metrics(y_vl, bf)
@@ -184,18 +175,20 @@ def run_kfold_doc_level(X, y, doc_names, device):
     return fold_metrics
 
 
-def run_kfold_sample_level(X, y, device):
-    """5-fold CV with sample-level splitting (for non-augmented)."""
-    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
+def run_kfold_sample_level(X, y, device, doc_names=None):
+    """5-fold CV — uses document-level split when doc_names provided."""
+    X = np.asarray(X)
+    y = np.asarray(y)
+    groups = np.asarray(doc_names if doc_names is not None
+                        else [str(i) for i in range(len(X))])
+    sgkf = StratifiedGroupKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
     fold_metrics = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups), 1):
         np.random.seed(SEED + fold)
         torch.manual_seed(SEED + fold)
-
         X_tr, y_tr = X[train_idx], y[train_idx]
-        X_vl, y_vl = X[val_idx], y[val_idx]
-
+        X_vl, y_vl = X[val_idx],   y[val_idx]
         model = make_mlp()
         bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
         m = compute_metrics(y_vl, bf)
@@ -288,7 +281,7 @@ def main():
     X_na, y_na, names_na = load_face_noaug()
     print(f"    Samples: {len(X_na)} ({(y_na==0).sum()}R + {(y_na==1).sum()}F)  dim={X_na.shape[1]}")
 
-    fold_na = run_kfold_sample_level(X_na, y_na, device)
+    fold_na = run_kfold_sample_level(X_na, y_na, device, doc_names=names_na)
     summary_na = {}
     for key in ['auc', 'eer']:
         vals = [m[key] for m in fold_na]

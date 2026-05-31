@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 
 warnings.filterwarnings('ignore')
 
@@ -64,18 +64,18 @@ def compute_metrics(labels, bf_scores, n_thresh=5000):
 # ═══════════════════════════════════════════════════════════════
 
 def load_npy_dir(emb_dir):
-    """Load Real/Fake .npy files from a directory."""
-    X, y = [], []
+    """Load Real/Fake .npy files. Returns (X, y, doc_names) using stem as doc id."""
+    X, y, names = [], [], []
     for label, cat in enumerate(['Real', 'Fake']):
         d = emb_dir / cat
         if not d.exists():
             print(f"  WARNING: {d} not found")
             continue
         for f in sorted(d.glob('*.npy')):
-            arr = np.load(f).astype(np.float32).flatten()
-            X.append(arr)
+            X.append(np.load(f).astype(np.float32).flatten())
             y.append(label)
-    return np.array(X, dtype=np.float32), np.array(y)
+            names.append(f.stem.split('-', 1)[-1])  # strip country prefix
+    return np.array(X, dtype=np.float32), np.array(y), names
 
 
 def load_wholeimage_face():
@@ -156,14 +156,18 @@ def train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device,
     return bf_scores
 
 
-def run_kfold(X, y, in_dim, hidden_dims, device):
-    skf = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
+def run_kfold(X, y, in_dim, hidden_dims, device, doc_names=None):
+    X = np.asarray(X)
+    y = np.asarray(y)
+    groups = np.asarray(doc_names if doc_names is not None
+                        else [str(i) for i in range(len(X))])
+    sgkf = StratifiedGroupKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
     fold_metrics = []
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+    for fold, (train_idx, val_idx) in enumerate(sgkf.split(X, y, groups), 1):
         np.random.seed(SEED + fold)
         torch.manual_seed(SEED + fold)
         X_tr, y_tr = X[train_idx], y[train_idx]
-        X_vl, y_vl = X[val_idx], y[val_idx]
+        X_vl, y_vl = X[val_idx],   y[val_idx]
         model = make_mlp(in_dim, hidden_dims)
         bf = train_mlp_fold(model, X_tr, y_tr, X_vl, y_vl, device)
         m = compute_metrics(y_vl, bf)
@@ -218,11 +222,11 @@ def main():
         np.random.seed(SEED)
         torch.manual_seed(SEED)
 
-        X, y = cfg['loader']()
+        X, y, doc_names = cfg['loader']()
         in_dim = X.shape[1]
         print(f"    Samples: {len(X)} ({(y==0).sum()}R + {(y==1).sum()}F)  dim={in_dim}")
 
-        fold_metrics = run_kfold(X, y, in_dim, cfg['hidden'], device)
+        fold_metrics = run_kfold(X, y, in_dim, cfg['hidden'], device, doc_names=doc_names)
 
         summary = {}
         for key in ['auc', 'eer']:
