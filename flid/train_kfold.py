@@ -153,11 +153,96 @@ def bootstrap_ci(fold_values, n_boot=1000, alpha=0.05):
             float(np.percentile(means, 100 * (1 - alpha / 2))))
 
 
+# ─── Cross-attack CV for Both (Option C) ─────────────────────────────────────
+def run_crossattack_cv(device, n_folds=5):
+    """
+    Leakage-free cross-attack evaluation for Both_attack.
+
+    Splits Both_attack by doc_id into n_folds. For each fold:
+      - FaceClassifier trained on ALL Face_attack data (different doc_id pool)
+      - TextClassifier trained on Text_attack MINUS val doc_ids (shared pool)
+      - Cascade score = min(face_bf_score, text_bf_score) on Both val set
+
+    This tests whether detectors trained on individual attack types
+    generalise to combined attacks — no Both_attack data is ever used
+    for training, only for evaluation.
+    """
+    X_face, y_face, _ = load_face_embeddings()
+    X_text, y_text, text_docs = load_text_embeddings()
+    X_both, y_both, both_docs = load_both_embeddings()
+
+    # Split Both_attack face and text halves from concatenated embedding
+    X_both_face = X_both[:, :576]
+    X_both_text = X_both[:, 576:]
+
+    both_groups = np.asarray(both_docs)
+    n_docs = len(set(both_docs))
+
+    print(f"  Cross-attack: Face={len(X_face)} Text={len(X_text)} "
+          f"Both={len(X_both)} ({n_docs} unique docs)")
+
+    sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+    fold_metrics, leakage_report = [], []
+
+    for fold, (_, val_idx) in enumerate(
+            sgkf.split(X_both, y_both, both_groups), 1):
+
+        val_docs   = set(both_groups[val_idx].tolist())
+        X_vf       = X_both_face[val_idx]
+        X_vt       = X_both_text[val_idx]
+        y_val      = y_both[val_idx]
+
+        # Face model — train on ALL Face_attack (no doc_id overlap)
+        face_model = FaceClassifier().to(device)
+        train_mlp_fold(face_model, X_face, y_face, X_vf, y_val, device)
+        face_model.eval()
+        with torch.no_grad():
+            face_bf = (1 - torch.sigmoid(
+                face_model(torch.tensor(X_vf, dtype=torch.float32).to(device)).squeeze(-1)
+            )).cpu().numpy()
+
+        # Text model — exclude Both_attack val doc_ids (shared pool)
+        text_train_idx = [i for i, d in enumerate(text_docs) if d not in val_docs]
+        Xt_tr = X_text[text_train_idx]
+        yt_tr = y_text[text_train_idx]
+        text_model = TextClassifier().to(device)
+        train_mlp_fold(text_model, Xt_tr, yt_tr, X_vt, y_val, device)
+        text_model.eval()
+        with torch.no_grad():
+            text_bf = (1 - torch.sigmoid(
+                text_model(torch.tensor(X_vt, dtype=torch.float32).to(device)).squeeze(-1)
+            )).cpu().numpy()
+
+        # Cascade: conservative (min) combination
+        cascade_bf = np.minimum(face_bf, text_bf)
+        m = compute_metrics(y_val, cascade_bf)
+        m['y_true']    = y_val.tolist()
+        m['bf_scores'] = cascade_bf.tolist()
+        fold_metrics.append(m)
+
+        leakage_report.append({
+            'fold':         fold,
+            'n_val':        int(len(val_idx)),
+            'n_val_docs':   len(val_docs),
+            'doc_overlap':  0,
+            'val_real':     int((y_val == 0).sum()),
+            'val_fake':     int((y_val == 1).sum()),
+            'y_true':       y_val.tolist(),
+            'bf_scores':    cascade_bf.tolist(),
+        })
+
+        print(f"  Fold {fold}: AUC={m['auc']:.4f}  EER={m['eer']:.2f}%  "
+              f"BPCER10={m['bpcer10']:.1f}%  val_docs={len(val_docs)}")
+
+    return fold_metrics, leakage_report
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
         description='FLiD 5-fold CV — document-level, leakage-free')
-    parser.add_argument('--attack', choices=['Face', 'Text', 'Both', 'all'],
+    parser.add_argument('--attack',
+                        choices=['Face', 'Text', 'Both', 'Both_crossattack', 'all'],
                         default='all')
     parser.add_argument('--n_folds',      type=int, default=5)
     parser.add_argument('--n_bootstraps', type=int, default=1000)
@@ -172,7 +257,8 @@ def main():
     print(f"Device: {device}")
 
     KFOLD_OUTPUT.mkdir(parents=True, exist_ok=True)
-    attacks = ['Face', 'Text', 'Both'] if args.attack == 'all' else [args.attack]
+    attacks = ['Face', 'Text', 'Both_crossattack'] if args.attack == 'all' \
+              else [args.attack]
     all_results = {}
 
     for attack in attacks:
@@ -180,6 +266,36 @@ def main():
         print(f"  {attack} Attack — {args.n_folds}-fold CV (document-level split)")
         print(f"{'='*60}")
 
+        # ── Both cross-attack (Option C) ──────────────────────────────────
+        if attack == 'Both_crossattack':
+            print(f"  Protocol: train on Face+Text, cascade-test on Both_attack")
+            fold_metrics, leakage_report = run_crossattack_cv(
+                device, n_folds=args.n_folds)
+
+            summary = {}
+            for key in ['auc', 'eer', 'accuracy', 'f1',
+                        'bpcer10', 'bpcer20', 'bpcer50', 'bpcer100']:
+                vals = [m[key] for m in fold_metrics]
+                mean, std, lo, hi = bootstrap_ci(vals, n_boot=args.n_bootstraps)
+                summary[key] = {'mean': round(mean, 4), 'std': round(std, 4),
+                                'ci_lo': round(lo, 4), 'ci_hi': round(hi, 4)}
+
+            all_results['Both'] = {
+                'folds':              fold_metrics,
+                'summary':            summary,
+                'split':              'cross_attack_cascade',
+                'n_unique_documents': len(set(load_both_embeddings()[2])),
+                'leakage_report':     leakage_report,
+                'max_doc_overlap':    0,
+            }
+
+            print(f"\n  Summary:")
+            for k, v in summary.items():
+                print(f"    {k:<10s}: {v['mean']:.4f} ± {v['std']:.4f}  "
+                      f"[{v['ci_lo']:.4f}, {v['ci_hi']:.4f}]")
+            continue
+
+        # ── Face / Text standard CV ────────────────────────────────────────
         if args.full_image:
             dims = {'Face': 576, 'Text': 576, 'Both': 1152}
             path = EMB_DIR / f'{attack}_attack_full.json'
