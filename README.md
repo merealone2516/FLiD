@@ -107,32 +107,7 @@ FLiD/
     └── *.png / *.pdf                  # Paper figures
 ```
 
----
 
-## Pipeline
-
-```
-Document image
-   │
-   ▼  YOLO11 field detector (fine-tuned)
-{ face crop, name, dob, doe, doi crops }
-   │
-   ▼  frozen MobileNetV3-Small (ImageNet)   →  576-D embedding per field
-   │
-   ▼  lightweight MLP head (191K params)    →  P_field(real) per field
-   │
-   ▼  score-level fusion (per-field minimum)
-P_doc(real) = min( P_face(real),  min_j P_text^(j)(real) )
-```
-
-The MLP head is a 5-layer feed-forward network (`576 → 256 → 128 → 64 → 32 → 1`)
-with ReLU, dropout (0.2–0.3), and class-balanced `BCEWithLogitsLoss`. Only the
-head is trained — the backbone stays frozen. For combined attacks, the
-independently trained face and text heads are fused at **inference** via the
-per-field minimum (most-suspicious-field rule); taking the minimum rather than
-averaging prevents a single tampered field from being diluted by genuine ones.
-
----
 
 ## Quick start
 
@@ -196,16 +171,6 @@ test-train_data/
 └── Both_attack/  {Real, Fake} / {train, test} / *.jpg (+ *.json for Real)
 ```
 
-Each JSON contains `person_info.face_id` (document identity for leakage-free
-grouping) and `regions` (face/text bounding boxes).
-
-| Attack | Real | Fake | Total | Unique docs |
-|--------|------|------|-------|-------------|
-| Face   | 100  | 53   | 153   | 100         |
-| Text   | 311  | 309  | 620   | 362         |
-| Both   | 211  | 211  | 422   | 211         |
-
----
 
 ## Metrics
 
@@ -216,36 +181,9 @@ All metrics follow **ISO/IEC 30107-3**:
 - **EER** — Equal Error Rate (operating point where APCER = BPCER)
 - **BPCER@10** — BPCER at an APCER of 10%
 
-We additionally report ROC AUC and Accuracy. Bootstrap 95% confidence
-intervals use 1000 resamples of the 5 per-fold values.
+We additionally report ROC AUC and Accuracy.
 
 ---
-
-## Reproducibility
-
-All splits use `StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)`
-grouped by `face_id`. For combined attacks, the face and text detectors are
-trained only on their respective single-field data, and combined-attack
-documents are used **exclusively** for testing (cross-attack protocol). This
-both reflects realistic deployment and removes any possibility of overfitting
-to combined-attack samples. Embeddings are precomputed once and stored, so
-classification operates directly on the 576-D vectors.
-
-> **Note on pretrained weights.** YOLO checkpoints (`*.pt`) and extracted
-> embedding files (`*.json` under `embeddings/`) are not committed (see
-> `.gitignore`); regenerate them with the scripts above.
-
----
-
-## Citation
-
-```bibtex
-@article{kumar2026flid,
-  title   = {Field-Localized Forgery Detection for Digital Identity Documents},
-  author  = {Kumar, Abhishek and Tapwal, Riya and Maple, Carsten and Hooper, Mark},
-  year    = {2026}
-}
-```
 
 ## License
 
