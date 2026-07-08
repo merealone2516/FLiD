@@ -61,8 +61,6 @@ the 5,006 M two-pass baseline.
 <p align="center"><img src="results/score_yolo11.png" width="700" alt="Score distributions"/></p>
 <p align="center"><em>Bona-fide vs. attack score distributions.</em></p>
 
-<p align="center"><img src="results/acc_prec_comparison.png" width="700" alt="Comparison with general-purpose detectors"/></p>
-<p align="center"><em>Accuracy/Precision vs. general-purpose forgery detectors (TruFor, MMFusion, UniVAD).</em></p>
 
 All result JSONs and figures are in [`results/`](results/).
 
